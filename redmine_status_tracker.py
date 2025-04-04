@@ -217,7 +217,7 @@ class RedmineStatusTracker:
         # Add current time as the final timestamp if ticket is still open
         if len(status_changes) > 0:
             current_status = status_changes[-1]['status_name']
-            now = datetime.now().replace(tzinfo=status_changes[-1]['timestamp'].tzinfo)
+            now = datetime.now(tz=status_changes[-1]['timestamp'].tzinfo)
             status_changes.append({
                 'timestamp': now,
                 'status_id': status_changes[-1]['status_id'],
@@ -284,6 +284,11 @@ class RedmineStatusTracker:
             
             # Calculate additional time metrics
             created_on = datetime.fromisoformat(ticket_data['issue']['created_on'].replace('Z', '+00:00'))
+            start_date = datetime.strptime(ticket_data['issue']['start_date'], "%Y-%m-%d")
+            due_date = datetime.strptime(ticket_data['issue']['due_date'], "%Y-%m-%d")
+
+            original_estimation = (due_date - start_date).total_seconds()
+    
             assignment_events = self.extract_assignment_events(ticket_data)
             if assignment_events:
                 assignment_time = assignment_events[0]['timestamp']
@@ -298,7 +303,6 @@ class RedmineStatusTracker:
             for event in status_changes:
                 if event['timestamp'] > assignment_time and event['status_name'] == "In Progress":
                     time_new_to_in_progress = (event['timestamp'] - assignment_time).total_seconds()
-                    break
             
             report[ticket_id] = {
                 'subject': ticket_data['issue'].get('subject', f"Ticket {ticket_id}"),
@@ -308,7 +312,8 @@ class RedmineStatusTracker:
                 'time_to_assign': time_to_assign,
                 'formatted_time_to_assign': self.format_time_duration(time_to_assign) if time_to_assign is not None else "N/A",
                 'time_new_to_in_progress': time_new_to_in_progress,
-                'formatted_time_new_to_in_progress': self.format_time_duration(time_new_to_in_progress) if time_new_to_in_progress is not None else "N/A"
+                'formatted_time_new_to_in_progress': self.format_time_duration(time_new_to_in_progress) if time_new_to_in_progress is not None else "N/A",
+                'formatted_time_original_estimation': self.format_time_duration(original_estimation) if original_estimation is not None else "N/A"
             }
             
         return report
@@ -555,6 +560,7 @@ def main():
             print(f"{highlight} {status}: {time_str}")
         print(f"Time to assign: {data['formatted_time_to_assign']}")
         print(f"Time from assignment to 'In Progress': {data['formatted_time_new_to_in_progress']}")
+        print(f"Original Estimation: {data['formatted_time_original_estimation']}")
         print()
         
     # Generate charts
