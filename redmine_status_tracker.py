@@ -217,7 +217,7 @@ class RedmineStatusTracker:
         # Add current time as the final timestamp if ticket is still open
         if len(status_changes) > 0:
             current_status = status_changes[-1]['status_name']
-            now = datetime.now(tz=status_changes[-1]['timestamp'].tzinfo)
+            now = datetime.now(tz=status_changes[-1]['timestamp'].tzinfo).replace(microsecond=0)
             status_changes.append({
                 'timestamp': now,
                 'status_id': status_changes[-1]['status_id'],
@@ -228,7 +228,6 @@ class RedmineStatusTracker:
         for i in range(len(status_changes) - 1):
             current = status_changes[i]
             next_change = status_changes[i + 1]
-            
             duration = (next_change['timestamp'] - current['timestamp']).total_seconds()
             time_in_status[current['status_name']] += duration
             
@@ -284,10 +283,24 @@ class RedmineStatusTracker:
             
             # Calculate additional time metrics
             created_on = datetime.fromisoformat(ticket_data['issue']['created_on'].replace('Z', '+00:00'))
-            start_date = datetime.strptime(ticket_data['issue']['start_date'], "%Y-%m-%d")
-            due_date = datetime.strptime(ticket_data['issue']['due_date'], "%Y-%m-%d")
-
-            original_estimation = (due_date - start_date).total_seconds()
+            
+            # FIX: Extract and store estimated hours directly from the API response instead of calculating
+            # This fixes the issue with the Original Estimation calculation
+            estimated_hours = ticket_data['issue'].get('estimated_hours')
+            if estimated_hours is not None:
+                estimated_seconds = estimated_hours * 3600  # Convert hours to seconds
+            else:
+                # Fallback to calculating from start_date and due_date if estimated_hours is not available
+                try:
+                    start_date = datetime.strptime(ticket_data['issue'].get('start_date', ''), "%Y-%m-%d")
+                    due_date = datetime.strptime(ticket_data['issue'].get('due_date', ''), "%Y-%m-%d")
+                    # Calculate business days between start and due date (excluding weekends)
+                    business_days = sum(1 for d in range((due_date - start_date).days + 1) 
+                                       if (start_date + timedelta(days=d)).weekday() < 5)
+                    estimated_seconds = business_days * 8 * 3600  # 8 hours per business day
+                except (ValueError, TypeError):
+                    # If dates are missing or invalid, set estimation to None
+                    estimated_seconds = None
     
             assignment_events = self.extract_assignment_events(ticket_data)
             if assignment_events:
@@ -296,13 +309,14 @@ class RedmineStatusTracker:
             else:
                 # If no assignment event, assume ticket was assigned at creation
                 assignment_time = created_on
-                time_to_assign = None
+                time_to_assign = 0
             
             time_new_to_in_progress = None
             # Calculate time from assignment (or creation if assigned at creation) to first "In Progress" event
             for event in status_changes:
                 if event['timestamp'] > assignment_time and event['status_name'] == "In Progress":
                     time_new_to_in_progress = (event['timestamp'] - assignment_time).total_seconds()
+                    break
             
             report[ticket_id] = {
                 'subject': ticket_data['issue'].get('subject', f"Ticket {ticket_id}"),
@@ -313,7 +327,8 @@ class RedmineStatusTracker:
                 'formatted_time_to_assign': self.format_time_duration(time_to_assign) if time_to_assign is not None else "N/A",
                 'time_new_to_in_progress': time_new_to_in_progress,
                 'formatted_time_new_to_in_progress': self.format_time_duration(time_new_to_in_progress) if time_new_to_in_progress is not None else "N/A",
-                'formatted_time_original_estimation': self.format_time_duration(original_estimation) if original_estimation is not None else "N/A"
+                'original_estimation': estimated_seconds,
+                'formatted_time_original_estimation': self.format_time_duration(estimated_seconds) if estimated_seconds is not None else "N/A"
             }
             
         return report
@@ -537,6 +552,8 @@ def main():
                 'formatted_time_to_assign': data['formatted_time_to_assign'],
                 'time_new_to_in_progress': data['time_new_to_in_progress'],
                 'formatted_time_new_to_in_progress': data['formatted_time_new_to_in_progress'],
+                'original_estimation': data['original_estimation'],
+                'formatted_time_original_estimation': data['formatted_time_original_estimation'],
                 'status_history': [
                     {
                         'timestamp': change['timestamp'].isoformat(),
@@ -551,7 +568,9 @@ def main():
             json.dump(serializable_report, f, indent=2)
     
     # Print text report
-    print("\n=== Redmine Status Time Tracking Report ===\n")
+    print("\n=== Redmine Status Time Tracking Report (Business Hours Only) ===\n")
+    print("Working hours: 8 hours per day (Mon-Fri excluding holidays)\n")
+    
     for ticket_id, data in report.items():
         print(f"Ticket #{ticket_id}: {data['subject']}")
         print("-" * 40)
