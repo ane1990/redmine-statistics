@@ -109,17 +109,6 @@ class RedmineStatusTracker:
         
         status_changes = []
         
-        # Add the creation date with initial status
-        created_on = ticket_data['issue']['created_on']
-        initial_status_id = ticket_data['issue'].get('status', {}).get('id')
-        initial_status_name = ticket_data['issue'].get('status', {}).get('name', 'Unknown')
-        
-        status_changes.append({
-            'timestamp': datetime.fromisoformat(created_on.replace('Z', '+00:00')),
-            'status_id': initial_status_id,
-            'status_name': initial_status_name
-        })
-        
         # Process journals for status changes
         for journal in ticket_data['issue'].get('journals', []):
             for detail in journal.get('details', []):
@@ -230,6 +219,7 @@ class RedmineStatusTracker:
             next_change = status_changes[i + 1]
             duration = (next_change['timestamp'] - current['timestamp']).total_seconds()
             time_in_status[current['status_name']] += duration
+            logging.info(f"Duration {duration} for status {current['status_name']}, with initial timestamp {current['timestamp']} and final timestamp {next_change['timestamp']} , for a total of {time_in_status[current['status_name']]}")
             
         return dict(time_in_status)
     
@@ -354,7 +344,8 @@ class RedmineStatusTracker:
                     'Ticket ID': str(ticket_id),
                     'Subject': data['subject'],
                     'Status': status,
-                    'Hours': hours
+                    'Hours': hours,
+                    'Estimation': data['original_estimation']
                 })
         
         if not all_tickets_data:
@@ -375,13 +366,13 @@ class RedmineStatusTracker:
         sns.barplot(x='Status', y='Hours', data=status_summary, palette=colors)
         plt.title('Total Time Spent in Each Status Across All Tickets')
         plt.xlabel('Status')
-        plt.ylabel('Hours')
+        plt.ylabel(['Hours'])
         plt.xticks(rotation=45, ha='right')
         plt.tight_layout()
         plt.savefig(f"{output_dir}/status_time_summary.png")
         
         # 2. Per-ticket status time breakdown
-        if len(report) <= 10:  # Only create this plot if we have 10 or fewer tickets
+        if len(report) <= 30:  # Only create this plot if we have 10 or fewer tickets
             plt.figure(figsize=(14, 8))
             ticket_pivot = df.pivot_table(
                 index='Ticket ID', 
@@ -397,20 +388,28 @@ class RedmineStatusTracker:
             plt.legend(title='Status', bbox_to_anchor=(1.05, 1), loc='upper left')
             plt.tight_layout()
             plt.savefig(f"{output_dir}/ticket_status_breakdown.png")
-        
+    
         # 3. If we have a focus status, show comparison across tickets
         if focus_status and focus_status in df['Status'].values:
             plt.figure(figsize=(12, 6))
             focus_df = df[df['Status'] == focus_status]
             focus_df = focus_df.sort_values('Hours', ascending=False)
             
-            sns.barplot(x='Ticket ID', y='Hours', data=focus_df, color='#ff7f0e')
+            # Reshape the DataFrame from wide to long format
+            focus_melted = focus_df.melt(id_vars=['Ticket ID'], 
+                                        value_vars=['Hours', 'Estimation'], 
+                                        var_name='Metric', 
+                                        value_name='Value')
+            
+            # Create a barplot with side-by-side bars for Hours and Estimation
+            sns.barplot(x='Ticket ID', y='Value', hue='Metric', data=focus_melted, dodge=True)
             plt.title(f'Time Spent in "{focus_status}" Status by Ticket')
-            plt.xlabel('Ticket ID')
-            plt.ylabel('Hours')
+            plt.xlabel('Ticket IDs')
+            plt.ylabel('Value')
             plt.xticks(rotation=45, ha='right')
             plt.tight_layout()
             plt.savefig(f"{output_dir}/focus_status_comparison.png")
+
             
         # 4. Generate a timeline visualization for a single ticket if only one was provided
         if len(report) == 1:
